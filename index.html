@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Liquid Chrome</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#0b0b0b;overflow:hidden}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:none;touch-action:none}
+  .mono{font:500 12px/1 ui-monospace,"DejaVu Sans Mono",Menlo,Consolas,monospace;letter-spacing:.2em;text-transform:uppercase;color:#7d7a74}
+  .corner{position:fixed;top:4.2vh;pointer-events:none}
+  .tl{left:5vw}.tr{right:5vw;text-align:right}
+  .corner b{display:block;color:#d9d6cf;font-weight:600;margin-bottom:8px}
+  .ui{position:fixed;left:0;right:0;bottom:5.5vh;display:flex;justify-content:center;pointer-events:none}
+  .field{pointer-events:auto;display:flex;align-items:center;gap:14px;padding:10px 2px;border-bottom:1px solid rgba(255,255,255,.2)}
+  .field input{background:transparent;border:0;outline:0;color:#efece6;font:inherit;letter-spacing:inherit;text-transform:uppercase;width:17ch;caret-color:#efece6}
+  .field input::placeholder{color:#55524d}
+  #nogl{display:none;position:fixed;inset:0;align-items:center;justify-content:center;color:#bbb;font:14px/1.5 system-ui,sans-serif;text-align:center;padding:24px}
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="A name rendered as liquid chrome. A mercury drop follows the cursor and merges with the letters."></canvas>
+<div class="corner tl mono"><b>Abhishek Fagna</b>frontend + ai</div>
+<div class="corner tr mono"><b>Liquid chrome</b>webgl · no libraries</div>
+<div class="ui"><label class="field mono">type a name<input id="name" maxlength="16" autocomplete="off" spellcheck="false" placeholder="abhishek fagna"></label></div>
+<div id="nogl">This piece needs WebGL2. Try a recent Chrome, Edge, Firefox or Safari.</div>
+<script>
+(function(){
+"use strict";
+var CAP = location.hash === "#cap";
+var FONT = '"Archivo Black","Arial Black","Helvetica Neue",Arial,"DejaVu Sans",sans-serif';
+var DEFAULT = "ABHISHEK FAGNA";
+var WEIGHT = "900";
+var cv = document.getElementById("c");
+var gl = cv.getContext("webgl2", {antialias:false, alpha:false, preserveDrawingBuffer:CAP, powerPreference:"high-performance"});
+if(!gl){ document.getElementById("nogl").style.display = "flex"; return; }
+
+/* ---------- shaders ---------- */
+var VS = "#version 300 es\nvoid main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));gl_Position=vec4(p*2.-1.,0.,1.);}";
+var FS = [
+"#version 300 es",
+"precision highp float;",
+"uniform sampler2D uA; uniform sampler2D uB;",
+"uniform float uMix, uGrow, uT, uFs, uIntro;",
+"uniform vec2 uRes, uLight;",
+"uniform vec4 uD[4];",
+"out vec4 o;",
+"float h21(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}",
+"float vn(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);",
+"  return mix(mix(h21(i),h21(i+vec2(1,0)),f.x),mix(h21(i+vec2(0,1)),h21(i+vec2(1,1)),f.x),f.y);}",
+// the liquid: blurred letters + mercury drops + a slow ripple, all in one field
+"float F(vec2 p){",
+"  vec2 uv=p/uRes;",
+"  float t=mix(texture(uA,uv).r,texture(uB,uv).r,uMix)*uGrow;",
+"  for(int i=0;i<4;i++){vec2 q=p-uD[i].xy;t+=uD[i].w*exp(-dot(q,q)/(uD[i].z*uD[i].z));}",
+"  float wob=.04+.12*sin(3.14159*uMix)+.14*uIntro;",
+"  t+=(vn(p/uFs*1.7+vec2(uT*.21,-uT*.16))-.5)*wob;",
+"  return t;",
+"}",
+// rounded profile: steep at the rim, soft on top, like a bead of mercury
+"float Hh(float f){float x=clamp((f-.5)/.95,0.,1.);return sqrt(x);}",
+// a photo studio, reflected
+"vec3 env(vec3 r){",
+"  float a=uLight.x*.75+sin(uT*.19)*.12;float c=cos(a),s=sin(a);",
+"  r.xz=mat2(c,-s,s,c)*r.xz;",
+"  float y=r.y+.14+uLight.y*.22;",
+"  vec3 sky=mix(vec3(1.,.98,.94),vec3(.035),smoothstep(.08,.95,y));",
+"  vec3 gnd=mix(vec3(.26,.17,.1),vec3(.01),smoothstep(-.02,-.5,y));",
+"  vec3 col=y>0.?sky:gnd;",
+"  col*=1.-.75*exp(-abs(y-.03)*22.);",
+"  col+=vec3(1.,.93,.82)*exp(-abs(y+.04)*60.)*.9;",
+"  col+=vec3(1.)*1.7*smoothstep(.06,0.,abs(r.x+.45)-.16)*smoothstep(.06,0.,abs(y-.56)-.1);",
+"  col+=vec3(1.,.76,.46)*1.25*smoothstep(.08,0.,abs(r.x-.62)-.07)*smoothstep(.08,0.,abs(y-.26)-.3);",
+"  return col;",
+"}",
+"void main(){",
+"  vec2 p=gl_FragCoord.xy;",
+"  float f=F(p);",
+"  float e=max(1.5,uFs*.011);",
+"  float hx=Hh(F(p+vec2(e,0.)))-Hh(F(p-vec2(e,0.)));",
+"  float hy=Hh(F(p+vec2(0.,e)))-Hh(F(p-vec2(0.,e)));",
+"  float hs=uFs*.13/(2.*e);",
+"  vec3 n=normalize(vec3(-hx*hs,-hy*hs,1.));",
+"  vec3 r=vec3(2.*n.z*n.x,2.*n.z*n.y,2.*n.z*n.z-1.);",
+"  vec3 col=env(r);",
+"  float fr=pow(1.-n.z,3.);",
+"  col*=.78+.4*fr;",
+"  col+=vec3(1.,.96,.9)*pow(max(dot(r,normalize(vec3(-.4,.62,.68))),0.),90.)*2.4;",
+"  vec2 uv=p/uRes;",
+"  float vg=length((uv-vec2(.5,.52))*vec2(uRes.x/uRes.y,1.));",
+"  vec3 bg=vec3(.07,.066,.062)*(1.2-vg*.95);",
+"  float sh=smoothstep(.18,.75,F(p+vec2(uFs*.03,uFs*.08)));",
+"  bg*=1.-.62*sh;",
+"  float w=fwidth(f)*.8+1e-4;",
+"  float al=smoothstep(.5-w,.5+w,f);",
+"  vec3 c=mix(bg,col,al);",
+"  c+=(h21(p+fract(uT*7.)*91.)-.5)*.028;",
+"  o=vec4(pow(max(c,0.),vec3(1./1.08)),1.);",
+"}"].join("\n");
+
+function sh(type, src){ var s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+var prog=gl.createProgram();
+gl.attachShader(prog,sh(gl.VERTEX_SHADER,VS)); gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,FS)); gl.linkProgram(prog);
+if(!gl.getProgramParameter(prog,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+var U={}; ["uA","uB","uMix","uGrow","uT","uFs","uIntro","uRes","uLight","uD"].forEach(function(k){U[k]=gl.getUniformLocation(prog,k);});
+gl.uniform1i(U.uA,0); gl.uniform1i(U.uB,1);
+gl.bindVertexArray(gl.createVertexArray());
+
+function tex(){ var t=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,t);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE); return t; }
+var texA=tex(), texB=tex();
+
+/* ---------- the letters, as a soft field ---------- */
+var SC=.5, W=0, H=0, dpr=1, fw=2, fh=2;
+var fsA=100, fsB=100, textA=DEFAULT, textB=DEFAULT;
+var mc=document.createElement("canvas").getContext("2d");
+
+function box(src,dst,w,h,r,horiz){
+  var inv=1/(2*r+1), i, j, acc, len=horiz?w:h, lines=horiz?h:w;
+  for(j=0;j<lines;j++){
+    var base=horiz?j*w:j, step=horiz?1:w;
+    acc=src[base]*(r+1); for(i=1;i<=r;i++) acc+=src[base+Math.min(i,len-1)*step];
+    for(i=0;i<len;i++){
+      dst[base+i*step]=acc*inv;
+      acc+=src[base+Math.min(i+r+1,len-1)*step]-src[base+Math.max(i-r,0)*step];
+    }
+  }
+}
+function layout(text, ctx){
+  var words=text.trim().split(/\s+/).filter(Boolean); if(!words.length) words=DEFAULT.split(" ");
+  ctx.font=WEIGHT+" 100px "+FONT;
+  var best=null, n=words.length, i, j;
+  function tryL(lines){ var mw=0; lines.forEach(function(l){ mw=Math.max(mw,ctx.measureText(l).width/100); });
+    var fs=Math.min(fw*.88/mw, fh*.66/lines.length, fh*.34); if(!best||fs>best.fs*1.02) best={fs:fs,lines:lines}; }
+  tryL([words.join(" ")]);
+  for(i=1;i<n;i++){ tryL([words.slice(0,i).join(" "),words.slice(i).join(" ")]);
+    for(j=i+1;j<n;j++) tryL([words.slice(0,i).join(" "),words.slice(i,j).join(" "),words.slice(j).join(" ")]); }
+  return best;
+}
+function buildField(text, target){
+  var c=document.createElement("canvas"); c.width=fw; c.height=fh; var x=c.getContext("2d");
+  var L=layout(text,x), fs=L.fs;
+  x.font=WEIGHT+" "+fs+"px "+FONT; x.textAlign="center"; x.textBaseline="middle";
+  x.fillStyle=x.strokeStyle="#fff"; x.lineWidth=fs*(WEIGHT==="400"?.02:.05); x.lineJoin="round";
+  var lh=fs*1.0, y0=fh*.47-(L.lines.length-1)*lh/2;
+  L.lines.forEach(function(l,k){ x.fillText(l,fw/2,y0+k*lh); x.strokeText(l,fw/2,y0+k*lh); });
+  var d=x.getImageData(0,0,fw,fh).data, a=new Float32Array(fw*fh), b=new Float32Array(fw*fh), i;
+  for(i=0;i<a.length;i++) a[i]=d[i*4+3]/255;
+  var r=Math.max(1,Math.round(fs*.058));
+  for(i=0;i<3;i++){ box(a,b,fw,fh,r,true); box(b,a,fw,fh,r,false); }
+  var out=new Float32Array(fw*fh);
+  for(i=0;i<fh;i++) out.set(a.subarray((fh-1-i)*fw,(fh-i)*fw), i*fw);
+  gl.bindTexture(gl.TEXTURE_2D,target);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.R16F,fw,fh,0,gl.RED,gl.FLOAT,out);
+  return fs/SC/dpr;   // font size in css px
+}
+
+function resize(){
+  dpr=Math.min(window.devicePixelRatio||1,1.75); W=window.innerWidth; H=window.innerHeight;
+  cv.width=Math.round(W*dpr); cv.height=Math.round(H*dpr);
+  fw=Math.max(2,Math.round(cv.width*SC)); fh=Math.max(2,Math.round(cv.height*SC));
+  fsA=buildField(textA,texA); fsB=buildField(textB,texB);
+  gl.viewport(0,0,cv.width,cv.height);
+}
+
+/* ---------- motion ---------- */
+function sstep(x){x=x<0?0:x>1?1:x;return x*x*(3-2*x);}
+function ease(x){x=x<0?0:x>1?1:x;return x<.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2;}
+var T=0, mixv=0, morphT=-1, light={x:0,y:0};
+var ptr={x:0,y:0,on:0,want:0,last:-99,init:false};
+var drops=[{k:70,d:12,s:1},{k:44,d:10,s:.62},{k:31,d:8.5,s:.45},{k:23,d:7.5,s:.32}];
+drops.forEach(function(q){q.x=q.y=q.vx=q.vy=0;});
+var D=new Float32Array(16);
+
+function setText(t){
+  t=(t||"").toUpperCase().trim()||DEFAULT;
+  if(t===(morphT>=0?textB:textA)) return;
+  if(morphT>=0){ var s=texA; texA=texB; texB=s; textA=textB; fsA=fsB; }
+  textB=t; fsB=buildField(t,texB); morphT=0;
+}
+function point(x,y){ ptr.x=x; ptr.y=y; ptr.want=1; ptr.last=T;
+  if(!ptr.init){ ptr.init=true; drops.forEach(function(q){q.x=x;q.y=y;}); } }
+cv.addEventListener("pointermove",function(e){point(e.clientX,e.clientY);});
+cv.addEventListener("pointerdown",function(e){point(e.clientX,e.clientY);});
+cv.addEventListener("pointerleave",function(e){ if(e.pointerType==="mouse") ptr.want=0; });
+
+var input=document.getElementById("name"), deb=0;
+input.addEventListener("input",function(){ clearTimeout(deb); deb=setTimeout(function(){setText(input.value);},420); });
+input.addEventListener("keydown",function(e){ if(e.key==="Enter"){ clearTimeout(deb); setText(input.value); input.blur(); } });
+
+function step(dt){
+  T+=dt;
+  if(!CAP && T>3.2 && T-ptr.last>4){       // nobody here: the drop wanders through the letters
+    var fs=fsA*(1-mixv)+fsB*mixv;
+    point(W/2+Math.sin(T*.42)*Math.min(W*.34,fs*4), H*.47+Math.sin(T*.83+.7)*fs*.75); ptr.last=T-4.01;
+  }
+  ptr.on+=(ptr.want-ptr.on)*(1-Math.exp(-dt*3));
+  for(var i=0;i<drops.length;i++){ var q=drops[i], tx=i?drops[i-1].x:ptr.x, ty=i?drops[i-1].y:ptr.y;
+    q.vx+=((tx-q.x)*q.k-q.vx*q.d)*dt; q.vy+=((ty-q.y)*q.k-q.vy*q.d)*dt; q.x+=q.vx*dt; q.y+=q.vy*dt; }
+  if(morphT>=0){ morphT+=dt/1.5; mixv=ease(morphT);
+    if(morphT>=1){ var s=texA; texA=texB; texB=s; textA=textB; fsA=fsB; mixv=0; morphT=-1; } }
+  var lx=ptr.init?(ptr.x/W*2-1)*ptr.on:0, ly=ptr.init?(ptr.y/H*2-1)*ptr.on:0, kl=1-Math.exp(-dt*2.4);
+  light.x+=(lx-light.x)*kl; light.y+=(ly-light.y)*kl;
+}
+function draw(){
+  var fs=fsA*(1-mixv)+fsB*mixv, R=fs*.2;
+  for(var i=0;i<4;i++){ var q=drops[i];
+    D[i*4]=q.x*dpr; D[i*4+1]=(H-q.y)*dpr; D[i*4+2]=R*q.s*dpr; D[i*4+3]=ptr.init?ptr.on*.9:0; }
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,texA);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,texB);
+  gl.uniform1f(U.uMix,mixv); gl.uniform1f(U.uGrow,sstep((T-.15)/2.3));
+  gl.uniform1f(U.uIntro,1-sstep((T-.4)/2.6)); gl.uniform1f(U.uT,T); gl.uniform1f(U.uFs,fs*dpr);
+  gl.uniform2f(U.uRes,cv.width,cv.height); gl.uniform2f(U.uLight,light.x,light.y); gl.uniform4fv(U.uD,D);
+  gl.drawArrays(gl.TRIANGLES,0,3);
+}
+
+function start(){
+  resize(); window.addEventListener("resize",resize);
+  window.__cap={ step:function(dt,x,y,on){ if(x!=null) point(x,y); if(!on) ptr.want=0; step(dt); draw(); gl.finish(); },
+                 type:function(s){ input.value=s; }, set:function(s){ setText(s); } };
+  if(CAP) return;
+  var last=performance.now();
+  (function loop(now){ var dt=Math.min(.05,(now-last)/1000); last=now; step(dt); draw(); requestAnimationFrame(loop); })(last);
+}
+var ready=false; function go(){ if(ready) return; ready=true;
+  try{ if(document.fonts.check('100px "Archivo Black"')) WEIGHT="400"; }catch(e){} start(); }
+if(document.fonts&&document.fonts.load){ document.fonts.load('100px "Archivo Black"').then(go,go); setTimeout(go,1500); } else go();
+})();
+</script>
+</body>
+</html>
